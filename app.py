@@ -201,48 +201,149 @@ Rispondi solo con la categoria."""
             st.warning(f"Errore batch OpenAI: {e}")
             return {}
 
+    def debug_response_structure(self, data, query):
+        """Debug della struttura della risposta per capire dove sono i dati AI Overview"""
+        st.write(f"🔍 **Debug struttura dati per query: {query}**")
+        st.write("**Chiavi principali trovate:**")
+        for key in data.keys():
+            st.write(f"- {key}: {type(data[key])}")
+        
+        # Controlla specificamente AI Overview
+        if "ai_overview" in data:
+            st.write("**🤖 AI Overview trovato!**")
+            ai_data = data["ai_overview"]
+            st.write(f"- Tipo: {type(ai_data)}")
+            if isinstance(ai_data, dict):
+                st.write("- Sottocampi:")
+                for subkey in ai_data.keys():
+                    st.write(f"  - {subkey}: {type(ai_data[subkey])}")
+                
+                # Mostra text_blocks se presenti
+                if "text_blocks" in ai_data:
+                    st.write(f"  - text_blocks contiene {len(ai_data['text_blocks'])} blocchi")
+                
+                # Mostra references se presenti
+                if "references" in ai_data:
+                    st.write(f"  - references contiene {len(ai_data['references'])} fonti")
+                    for i, ref in enumerate(ai_data['references'][:3]):  # Prime 3
+                        st.write(f"    {i+1}. {ref.get('title', 'No title')} - {ref.get('source', 'No source')}")
+                
+                # Mostra page_token se presente
+                if "page_token" in ai_data:
+                    st.write(f"  - page_token presente (lunghezza: {len(str(ai_data['page_token']))})")
+        
+        # Controlla altri campi che potrebbero contenere AI Overview
+        other_ai_fields = ["answer_box", "featured_snippet", "knowledge_graph"]
+        for field in other_ai_fields:
+            if field in data:
+                st.write(f"**📦 {field} trovato:**")
+                field_data = data[field]
+                if isinstance(field_data, dict):
+                    for subkey in field_data.keys():
+                        st.write(f"  - {subkey}: {type(field_data[subkey])}")
+        
+        # Mostra alcuni campioni di dati se richiesto
+        if st.checkbox(f"Mostra dati JSON completi per '{query}'", key=f"debug_full_{query}"):
+            st.json(data)
+
+    def fetch_ai_overview_details(self, page_token):
+        """Fetch dettagli AI Overview usando il page_token dedicato"""
+        if not page_token:
+            return None
+            
+        params = {
+            "api_key": self.serpapi_key,
+            "engine": "google_ai_overview",
+            "page_token": page_token
+        }
+        
+        try:
+            response = requests.get(self.serpapi_url, params=params)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return None
+        except Exception as e:
+            return None
+
     def parse_ai_overview(self, data):
-        """Estrae informazioni dall'AI Overview"""
+        """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
         ai_overview_info = {
             "has_ai_overview": False,
             "ai_overview_text": "",
             "ai_sources": [],
-            "ai_source_domains": []
+            "ai_source_domains": [],
+            "page_token": None
         }
         
-        # Cerca AI Overview in diversi possibili campi
-        ai_overview_keys = ["ai_overview", "answer_box", "featured_snippet"]
-        
-        for key in ai_overview_keys:
-            if key in data:
-                ai_data = data[key]
-                ai_overview_info["has_ai_overview"] = True
-                
-                # Estrai testo
-                if isinstance(ai_data, dict):
-                    if "text" in ai_data:
-                        ai_overview_info["ai_overview_text"] = ai_data["text"]
-                    elif "snippet" in ai_data:
-                        ai_overview_info["ai_overview_text"] = ai_data["snippet"]
-                    elif "answer" in ai_data:
-                        ai_overview_info["ai_overview_text"] = ai_data["answer"]
+        # Controlla se c'è AI Overview embedded nei risultati
+        if "ai_overview" in data:
+            ai_data = data["ai_overview"]
+            ai_overview_info["has_ai_overview"] = True
+            
+            # Estrai testo dai text_blocks
+            if "text_blocks" in ai_data:
+                text_parts = []
+                for block in ai_data["text_blocks"]:
+                    if "snippet" in block:
+                        text_parts.append(block["snippet"])
                     
-                    # Estrai sources
-                    if "sources" in ai_data:
-                        sources = ai_data["sources"]
-                        if isinstance(sources, list):
-                            for source in sources:
-                                if isinstance(source, dict):
-                                    source_info = {
-                                        "title": source.get("title", ""),
-                                        "link": source.get("link", ""),
-                                        "domain": urlparse(source.get("link", "")).netloc if source.get("link") else ""
-                                    }
-                                    ai_overview_info["ai_sources"].append(source_info)
-                                    if source_info["domain"]:
-                                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
+                    # Se è una lista, estrai anche gli elementi
+                    if block.get("type") == "list" and "list" in block:
+                        for item in block["list"]:
+                            if "title" in item:
+                                text_parts.append(f"• {item['title']}")
+                            if "snippet" in item:
+                                text_parts.append(f"  {item['snippet']}")
                 
+                ai_overview_info["ai_overview_text"] = " ".join(text_parts)
+            
+            # Estrai references (fonti)
+            if "references" in ai_data:
+                for ref in ai_data["references"]:
+                    source_info = {
+                        "title": ref.get("title", ""),
+                        "link": ref.get("link", ""),
+                        "domain": urlparse(ref.get("link", "")).netloc if ref.get("link") else "",
+                        "source": ref.get("source", ""),
+                        "snippet": ref.get("snippet", "")
+                    }
+                    ai_overview_info["ai_sources"].append(source_info)
+                    if source_info["domain"]:
+                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
+        
+        # Controlla se c'è un page_token per chiamata separata
+        elif "ai_overview" in data and "page_token" in data["ai_overview"]:
+            ai_overview_info["page_token"] = data["ai_overview"]["page_token"]
+        
+        # Cerca page_token anche a livello root o in altri campi
+        for key in ["page_token", "ai_overview_page_token"]:
+            if key in data:
+                ai_overview_info["page_token"] = data[key]
                 break
+        
+        # Fallback: cerca in answer_box come AI Overview alternativo
+        if not ai_overview_info["has_ai_overview"] and "answer_box" in data:
+            answer_box = data["answer_box"]
+            if isinstance(answer_box, dict):
+                ai_overview_info["has_ai_overview"] = True
+                ai_overview_info["ai_overview_text"] = str(answer_box.get("snippet", answer_box.get("answer", "")))
+                
+                if "link" in answer_box:
+                    source_info = {
+                        "title": answer_box.get("title", ""),
+                        "link": answer_box.get("link", ""),
+                        "domain": urlparse(answer_box.get("link", "")).netloc if answer_box.get("link") else ""
+                    }
+                    ai_overview_info["ai_sources"].append(source_info)
+                    if source_info["domain"]:
+                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
+        
+        # Se abbiamo un page_token, prova a fare la chiamata dedicata
+        if ai_overview_info["page_token"] and not ai_overview_info["has_ai_overview"]:
+            detailed_ai = self.fetch_ai_overview_details(ai_overview_info["page_token"])
+            if detailed_ai and "ai_overview" in detailed_ai:
+                return self.parse_ai_overview(detailed_ai)
         
         return ai_overview_info
 
@@ -754,6 +855,12 @@ def main():
         value=5,
         help="Pagine da classificare insieme (più alto = più veloce)"
     ) if use_ai_classification else 1
+    
+    enable_debug = st.sidebar.checkbox(
+        "🐛 Modalità Debug",
+        value=False,
+        help="Mostra struttura dati SERPApi per debug"
+    )
 
     st.header("📝 Inserisci le Query")
     
@@ -896,6 +1003,22 @@ def main():
             results = analyzer.fetch_serp_results(query, country, language, num_results)
             
             if results:
+                # Debug mode: mostra struttura dati
+                if enable_debug and i < 3:  # Solo per le prime 3 query per non sovraccaricare
+                    with st.expander(f"🐛 Debug dati per '{query}'"):
+                        analyzer.debug_response_structure(results, query)
+                        
+                        # Mostra anche il parsing AI Overview in tempo reale
+                        st.write("**🤖 Parsing AI Overview per questa query:**")
+                        ai_test = analyzer.parse_ai_overview(results)
+                        st.write(f"- Ha AI Overview: {ai_test['has_ai_overview']}")
+                        if ai_test['ai_overview_text']:
+                            st.write(f"- Testo trovato: {ai_test['ai_overview_text'][:200]}...")
+                        st.write(f"- Fonti trovate: {len(ai_test['ai_sources'])}")
+                        if ai_test['ai_sources']:
+                            for j, source in enumerate(ai_test['ai_sources'][:3]):
+                                st.write(f"  {j+1}. {source['title']} - {source['domain']}")
+                
                 (domain_page_types_query, domain_occurences_query, query_page_types_query,
                  paa_questions_query, related_queries_query, paa_to_queries_query,
                  related_to_queries_query, paa_to_domains_query, ai_overview_info) = analyzer.parse_results(results, query)
