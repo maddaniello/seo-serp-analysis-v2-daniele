@@ -6,3 +6,5 @@ plotly>=5.15.0
 xlsxwriter>=3.1.0
 urllib3>=1.26.0
 aiohttp>=3.8.0
+pip install beautifulsoup4
+pip install extruct  # Opzionale, per analisi avanzata dati strutturati
