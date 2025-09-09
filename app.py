@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="SERP Analyzer Pro Enhanced",
+    page_title="SERP Analyzer Plus Ultra",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -64,6 +64,12 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Inizializza session state per persistenza dati
+if 'analysis_complete' not in st.session_state:
+    st.session_state.analysis_complete = False
+if 'analysis_data' not in st.session_state:
+    st.session_state.analysis_data = {}
 
 class EnhancedSERPAnalyzer:
     def __init__(self, serpapi_key, openai_api_key, own_site_domain=None):
@@ -730,7 +736,7 @@ Cluster: [Nome Cluster 2]
                                    paa_to_queries, related_to_queries, paa_to_domains, 
                                    ai_overview_data, own_site_tracking, ai_analysis_data,
                                    structured_data_analysis, keyword_clusters=None):
-        """Crea il report Excel potenziato con tutte le nuove analisi"""
+        """Crea il report Excel potenziato con grafici integrati"""
         
         # DataFrames esistenti...
         domain_page_types_list = []
@@ -750,9 +756,15 @@ Cluster: [Nome Cluster 2]
             domain_page_types_list.append(domain_data)
 
         domain_page_types_df = pd.DataFrame(domain_page_types_list)
+        
+        # ORDINAMENTO DECRESCENTE per occorrenze
         domains_df = pd.DataFrame(domains_counter.items(), columns=["Dominio", "Occorrenze"])
+        domains_df = domains_df.sort_values("Occorrenze", ascending=False).reset_index(drop=True)
         total_queries = sum(domains_counter.values())
         domains_df["% Presenza"] = (domains_df["Occorrenze"] / total_queries * 100).round(2)
+        
+        # Ordina anche competitor e tipologie per occorrenze
+        domain_page_types_df = domain_page_types_df.sort_values("Numero occorrenze", ascending=False).reset_index(drop=True)
 
         # Tracking del proprio sito
         own_site_df = pd.DataFrame()
@@ -776,67 +788,151 @@ Cluster: [Nome Cluster 2]
         # Analisi dati strutturati
         structured_data_df = pd.DataFrame(structured_data_analysis)
 
-        # Statistiche dati strutturati per query
-        structured_stats = []
-        if structured_data_analysis:
-            structured_df_temp = pd.DataFrame(structured_data_analysis)
-            for query in structured_df_temp['query'].unique():
-                query_data = structured_df_temp[structured_df_temp['query'] == query]
-                
-                # Conta tipi di schema più comuni
-                all_schemas = []
-                for schemas in query_data['schema_types']:
-                    if schemas:
-                        all_schemas.extend([s.strip() for s in schemas.split(',')])
-                
-                schema_counter = Counter(all_schemas)
-                top_schemas = schema_counter.most_common(3)
-                
-                structured_stats.append({
-                    "Query": query,
-                    "Pagine Analizzate": len(query_data),
-                    "Schema Types più Comuni": "; ".join([f"{schema} ({count})" for schema, count in top_schemas]),
-                    "% con JSON-LD": (query_data['json_ld_count'] > 0).mean() * 100,
-                    "% con Breadcrumbs": query_data['has_breadcrumbs'].mean() * 100 if 'has_breadcrumbs' in query_data.columns else 0,
-                    "% con FAQ": query_data['has_faq'].mean() * 100 if 'has_faq' in query_data.columns else 0,
-                    "% con Review": query_data['has_review'].mean() * 100 if 'has_review' in query_data.columns else 0
-                })
-
-        structured_stats_df = pd.DataFrame(structured_stats)
-
-        # DataFrames esistenti (AI Overview, PAA, etc.)
-        # [Mantieni il codice esistente per questi...]
+        # NUOVO: Creazione del tab "Analisi Keyword" riassuntivo
+        keyword_analysis_data = []
+        all_queries = list(ai_overview_data.keys())
         
-        ai_overview_list = []
-        ai_sources_list = []
-        
-        for query, ai_info in ai_overview_data.items():
-            ai_overview_list.append({
-                "Query": query,
-                "Ha AI Overview": ai_info["has_ai_overview"],
-                "Testo AI Overview": ai_info["ai_overview_text"][:500] + "..." if len(ai_info["ai_overview_text"]) > 500 else ai_info["ai_overview_text"],
-                "Numero Fonti": len(ai_info["ai_sources"]),
-                "Proprio Sito in AI": ai_info.get("own_site_in_ai", False),
-                "Posizione Proprio Sito": ai_info.get("own_site_ai_position", "")
-            })
+        for query in all_queries:
+            # Trova il cluster di appartenenza
+            cluster_name = "Non clusterizzato"
+            if keyword_clusters:
+                for cluster, keywords in keyword_clusters.items():
+                    if query in keywords:
+                        cluster_name = cluster
+                        break
             
-            for i, source in enumerate(ai_info["ai_sources"]):
-                ai_sources_list.append({
-                    "Query": query,
-                    "Fonte #": i + 1,
-                    "Titolo Fonte": source["title"],
-                    "Link Fonte": source["link"],
-                    "Dominio Fonte": source["domain"]
-                })
+            # Info AI Overview
+            ai_info = ai_overview_data.get(query, {})
+            has_ai_overview = ai_info.get("has_ai_overview", False)
+            num_sources = len(ai_info.get("ai_sources", []))
+            my_site_in_ai = ai_info.get("own_site_in_ai", False)
+            
+            # Analisi AI Overview (prima analisi disponibile per questa query)
+            ai_analysis_text = ""
+            for ai_item in ai_analysis_data:
+                if ai_item["query"] == query:
+                    ai_analysis_text = ai_item["ai_analysis"][:200] + "..." if len(ai_item["ai_analysis"]) > 200 else ai_item["ai_analysis"]
+                    break
+            
+            # Dati strutturati (schema types più comuni per questa query)
+            schema_types_list = []
+            for struct_item in structured_data_analysis:
+                if struct_item["query"] == query and struct_item.get("schema_types"):
+                    schema_types_list.extend([s.strip() for s in struct_item["schema_types"].split(',')])
+            
+            most_common_schemas = ", ".join([schema for schema, count in Counter(schema_types_list).most_common(3)])
+            
+            # Tipologia di pagina più frequente per questa query
+            page_types_for_query = query_page_types.get(query, [])
+            most_common_page_type = Counter(page_types_for_query).most_common(1)
+            most_common_page_type = most_common_page_type[0][0] if most_common_page_type else "N/A"
+            
+            keyword_analysis_data.append({
+                "Keyword": query,
+                "Cluster di riferimento": cluster_name,
+                "AI Overview": "SI" if has_ai_overview else "NO",
+                "Numero fonti": num_sources,
+                "Il mio sito compare": "SI" if my_site_in_ai else "NO",
+                "Dati strutturati SERP": most_common_schemas,
+                "Analisi AI Overview": ai_analysis_text if ai_analysis_text else "N/A",
+                "Tipologia risultato": most_common_page_type
+            })
         
-        ai_overview_df = pd.DataFrame(ai_overview_list)
-        ai_sources_df = pd.DataFrame(ai_sources_list)
+        keyword_analysis_df = pd.DataFrame(keyword_analysis_data)
 
-        # Salva tutto in Excel
+        # Salva tutto in Excel con grafici
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            domains_df.to_excel(writer, sheet_name="Top Domains", index=False)
-            domain_page_types_df.to_excel(writer, sheet_name="Competitor e Tipologie", index=False)
+            workbook = writer.book
+            
+            # NUOVO TAB: Analisi Keyword (primo tab)
+            keyword_analysis_df.to_excel(writer, sheet_name="Analisi Keyword", index=False)
+            worksheet_kw = writer.sheets["Analisi Keyword"]
+            
+            # Formattazione per il tab keyword
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#1f77b4',
+                'font_color': 'white',
+                'border': 1
+            })
+            
+            # Applica formattazione header
+            for col_num, col_name in enumerate(keyword_analysis_df.columns):
+                worksheet_kw.write(0, col_num, col_name, header_format)
+                # Auto-width per le colonne
+                worksheet_kw.set_column(col_num, col_num, len(col_name) + 5)
+            
+            # Top Domains con grafico
+            domains_df.to_excel(writer, sheet_name="Top Domains", index=False, startrow=1)
+            worksheet_domains = writer.sheets["Top Domains"]
+            
+            # Grafico a colonne per Top 10 domini
+            chart_domains = workbook.add_chart({'type': 'column'})
+            chart_domains.add_series({
+                'name': 'Occorrenze',
+                'categories': ['Top Domains', 2, 0, min(11, len(domains_df) + 1), 0],  # Top 10
+                'values': ['Top Domains', 2, 1, min(11, len(domains_df) + 1), 1],
+                'fill': {'color': '#1f77b4'},
+            })
+            chart_domains.set_title({'name': 'Top 10 Domini per Occorrenze'})
+            chart_domains.set_x_axis({'name': 'Domini'})
+            chart_domains.set_y_axis({'name': 'Occorrenze'})
+            chart_domains.set_size({'width': 600, 'height': 400})
+            worksheet_domains.insert_chart('E2', chart_domains)
+            
+            # Competitor e tipologie con grafico
+            domain_page_types_df.to_excel(writer, sheet_name="Competitor e Tipologie", index=False, startrow=1)
+            worksheet_comp = writer.sheets["Competitor e Tipologie"]
+            
+            # Grafico a barre stack per tipologie di pagine dei primi 10 domini
+            chart_comp = workbook.add_chart({'type': 'bar', 'subtype': 'stacked'})
+            
+            page_types = ['Homepage', 'Pagina di Categoria', 'Pagina Prodotto', 'Articolo di Blog', 'Pagina di Servizi', 'Altro']
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+            
+            for i, page_type in enumerate(page_types):
+                col_index = domain_page_types_df.columns.get_loc(page_type) if page_type in domain_page_types_df.columns else None
+                if col_index is not None:
+                    chart_comp.add_series({
+                        'name': page_type,
+                        'categories': ['Competitor e Tipologie', 2, 0, min(11, len(domain_page_types_df) + 1), 0],
+                        'values': ['Competitor e Tipologie', 2, col_index, min(11, len(domain_page_types_df) + 1), col_index],
+                        'fill': {'color': colors[i % len(colors)]},
+                    })
+            
+            chart_comp.set_title({'name': 'Tipologie di Pagine per Competitor'})
+            chart_comp.set_x_axis({'name': 'Occorrenze'})
+            chart_comp.set_y_axis({'name': 'Domini'})
+            chart_comp.set_size({'width': 800, 'height': 500})
+            worksheet_comp.insert_chart('J2', chart_comp)
+            
+            # Altri sheet esistenti
+            ai_overview_list = []
+            ai_sources_list = []
+            
+            for query, ai_info in ai_overview_data.items():
+                ai_overview_list.append({
+                    "Query": query,
+                    "Ha AI Overview": ai_info["has_ai_overview"],
+                    "Testo AI Overview": ai_info["ai_overview_text"][:500] + "..." if len(ai_info["ai_overview_text"]) > 500 else ai_info["ai_overview_text"],
+                    "Numero Fonti": len(ai_info["ai_sources"]),
+                    "Proprio Sito in AI": ai_info.get("own_site_in_ai", False),
+                    "Posizione Proprio Sito": ai_info.get("own_site_ai_position", "")
+                })
+                
+                for i, source in enumerate(ai_info["ai_sources"]):
+                    ai_sources_list.append({
+                        "Query": query,
+                        "Fonte #": i + 1,
+                        "Titolo Fonte": source["title"],
+                        "Link Fonte": source["link"],
+                        "Dominio Fonte": source["domain"]
+                    })
+            
+            ai_overview_df = pd.DataFrame(ai_overview_list)
+            ai_sources_df = pd.DataFrame(ai_sources_list)
+            
             ai_overview_df.to_excel(writer, sheet_name="AI Overview", index=False)
             ai_sources_df.to_excel(writer, sheet_name="AI Overview Sources", index=False)
             
@@ -849,10 +945,7 @@ Cluster: [Nome Cluster 2]
             if not structured_data_df.empty:
                 structured_data_df.to_excel(writer, sheet_name="Dati Strutturati SERP", index=False)
             
-            if not structured_stats_df.empty:
-                structured_stats_df.to_excel(writer, sheet_name="Stats Dati Strutturati", index=False)
-            
-            # Mantieni gli altri sheet esistenti...
+            # Keyword Clustering
             if keyword_clusters:
                 clustering_data = []
                 for cluster_name, keywords in keyword_clusters.items():
@@ -864,10 +957,10 @@ Cluster: [Nome Cluster 2]
                 clustering_df = pd.DataFrame(clustering_data)
                 clustering_df.to_excel(writer, sheet_name="Keyword Clustering", index=False)
 
-        return output.getvalue(), domains_df, own_site_df, ai_analysis_df, structured_data_df, structured_stats_df
+        return output.getvalue(), domains_df, own_site_df, ai_analysis_df, structured_data_df, keyword_analysis_df
 
 def main():
-    st.markdown('<h1 class="main-header">🔍 SERP Analyzer Pro Enhanced</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🔍 SERP Analyzer Plus Ultra</h1>', unsafe_allow_html=True)
     st.markdown("### 🚀 Analisi SERP avanzata con AI Overview, tracking sito e dati strutturati")
     st.markdown("---")
 
@@ -957,6 +1050,12 @@ def main():
         help="Numero di pagine top SERP da analizzare per dati strutturati"
     )
 
+    # Reset analisi
+    if st.sidebar.button("🔄 Reset Analisi"):
+        st.session_state.analysis_complete = False
+        st.session_state.analysis_data = {}
+        st.rerun()
+
     st.header("📝 Inserisci le Query")
     
     col1, col2 = st.columns([3, 1])
@@ -976,8 +1075,14 @@ def main():
         • 🤖 Analisi AI Overview  
         • 📊 Dati strutturati SERP
         • 🔍 Suggerimenti AI per ottimizzazione
+        • 📈 Grafici Excel integrati
+        • 🎯 Report keyword unificato
         """)
 
+    # Mostra risultati se l'analisi è stata completata
+    if st.session_state.analysis_complete and st.session_state.analysis_data:
+        display_results(st.session_state.analysis_data)
+    
     if st.button("🚀 Avvia Analisi Avanzata", type="primary", use_container_width=True):
         if use_ai_classification and (not serpapi_key or not openai_api_key):
             st.error("⚠️ Inserisci entrambe le API keys per l'analisi AI!")
@@ -996,338 +1101,384 @@ def main():
             st.error("⚠️ Massimo 100 query per l'analisi avanzata!")
             return
 
-        # Inizializza analyzer con il proprio sito
-        analyzer = EnhancedSERPAnalyzer(serpapi_key, openai_api_key, own_site_domain)
-        analyzer.use_ai = use_ai_classification
-
-        if own_site_domain:
-            st.info(f"🏠 Tracciamento attivato per: {own_site_domain}")
-
-        # Clustering keywords se abilitato
-        keyword_clusters = {}
-        if enable_keyword_clustering and use_ai_classification:
-            with st.spinner("🧠 Clustering semantico delle keyword..."):
-                try:
-                    keyword_clusters = analyzer.cluster_keywords_semantic(queries)
-                    st.success(f"✅ Identificati {len(keyword_clusters)} cluster semantici!")
-                except Exception as e:
-                    st.warning(f"Errore durante il clustering: {e}")
-
-        # Inizializza strutture dati per le nuove analisi
-        all_domains = []
-        query_page_types = defaultdict(list)
-        domain_page_types = defaultdict(lambda: defaultdict(int))
-        domain_occurences = defaultdict(int)
-        paa_questions = []
-        related_queries = []
-        paa_to_queries = defaultdict(set)
-        related_to_queries = defaultdict(set)
-        paa_to_domains = defaultdict(set)
-        ai_overview_data = {}
-        own_site_tracking = {}
-        ai_analysis_data = []
-        structured_data_analysis = []
-
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        for i, query in enumerate(queries):
-            status_text.text(f"🔍 Analizzando: {query} ({i+1}/{len(queries)})")
-            
-            # Fetch SERP results
-            results = analyzer.fetch_serp_results(query, country, language, num_results)
-            
-            if results:
-                # Parse risultati base
-                (domain_page_types_query, domain_occurences_query, query_page_types_query,
-                 paa_questions_query, related_queries_query, paa_to_queries_query,
-                 related_to_queries_query, paa_to_domains_query, ai_overview_info, 
-                 own_site_data, organic_results) = analyzer.parse_results(results, query)
-                
-                # Salva dati base
-                ai_overview_data[query] = ai_overview_info
-                own_site_tracking[query] = own_site_data
-                
-                # Aggiungi info AI Overview al tracking proprio sito
-                if own_site_domain:
-                    own_site_tracking[query]["in_ai_overview"] = ai_overview_info.get("own_site_in_ai", False)
-                    own_site_tracking[query]["ai_overview_position"] = ai_overview_info.get("own_site_ai_position", None)
-
-                # Merge dati
-                for domain, page_types in domain_page_types_query.items():
-                    for page_type, count in page_types.items():
-                        domain_page_types[domain][page_type] += count
-                
-                for domain, count in domain_occurences_query.items():
-                    domain_occurences[domain] += count
-                
-                query_page_types[query].extend(query_page_types_query[query])
-                paa_questions.extend(paa_questions_query)
-                related_queries.extend(related_queries_query)
-                all_domains.extend(domain_page_types_query.keys())
-
-                # NUOVE ANALISI AVANZATE
-                
-                # 1. Analisi pagine AI Overview
-                if enable_ai_overview_analysis and ai_overview_info["has_ai_overview"] and ai_overview_info["ai_sources"]:
-                    status_text.text(f"🤖 Analizzando AI Overview per: {query}")
-                    try:
-                        ai_analysis_results = analyzer.analyze_ai_overview_pages(ai_overview_info, query)
-                        ai_analysis_data.extend(ai_analysis_results)
-                    except Exception as e:
-                        st.warning(f"Errore analisi AI Overview per '{query}': {e}")
-
-                # 2. Analisi dati strutturati SERP
-                if enable_structured_data_analysis and organic_results:
-                    status_text.text(f"📊 Analizzando dati strutturati per: {query}")
-                    try:
-                        structured_results = analyzer.analyze_top_serp_structured_data(
-                            organic_results, query, max_pages_analysis
-                        )
-                        structured_data_analysis.extend(structured_results)
-                    except Exception as e:
-                        st.warning(f"Errore analisi dati strutturati per '{query}': {e}")
-            
-            progress_bar.progress((i + 1) / len(queries))
-            time.sleep(1.0)  # Rate limiting per le analisi avanzate
-
-        status_text.text("✅ Analisi completata! Generazione report avanzato...")
-
-        # Genera report Excel avanzato
-        domains_counter = Counter(all_domains)
-        excel_data, domains_df, own_site_df, ai_analysis_df, structured_data_df, structured_stats_df = analyzer.create_enhanced_excel_report(
-            domains_counter, domain_occurences, query_page_types, domain_page_types,
-            paa_questions, related_queries, paa_to_queries, related_to_queries, paa_to_domains, 
-            ai_overview_data, own_site_tracking, ai_analysis_data, structured_data_analysis, keyword_clusters
+        # Esegui analisi
+        results = run_analysis(
+            queries, serpapi_key, openai_api_key, own_site_domain,
+            country, language, num_results, use_ai_classification,
+            enable_keyword_clustering, enable_ai_overview_analysis,
+            enable_structured_data_analysis, max_pages_analysis
         )
-
-        # VISUALIZZAZIONE RISULTATI POTENZIATA
-        st.markdown("---")
-        st.header("📊 Risultati Analisi Avanzata")
-
-        # Metriche principali
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
         
-        with col1:
-            st.metric("Query Analizzate", len(queries))
-        with col2:
-            st.metric("Domini Trovati", len(domains_counter))
-        with col3:
-            ai_overview_count = sum(1 for ai_info in ai_overview_data.values() if ai_info["has_ai_overview"])
-            st.metric("Query con AI Overview", ai_overview_count)
-        with col4:
-            if own_site_domain:
-                own_serp_count = sum(1 for data in own_site_tracking.values() if data["in_serp"])
-                st.metric("Tuo Sito in SERP", own_serp_count)
-        with col5:
-            if own_site_domain:
-                own_ai_count = sum(1 for data in own_site_tracking.values() if data.get("in_ai_overview", False))
-                st.metric("Tuo Sito in AI Overview", own_ai_count)
-        with col6:
-            st.metric("Pagine Analizzate", len(ai_analysis_data) + len(structured_data_analysis))
-
-        # Tracking proprio sito (se abilitato)
-        if own_site_domain and not own_site_df.empty:
-            st.markdown("---")
-            st.header("🏠 Performance del Tuo Sito")
+        if results:
+            # Salva risultati in session state
+            st.session_state.analysis_data = results
+            st.session_state.analysis_complete = True
             
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Grafico presenza SERP vs AI Overview
-                own_site_summary = {
-                    "Solo SERP": len(own_site_df[(own_site_df["In SERP"] == True) & (own_site_df["In AI Overview"] == False)]),
-                    "Solo AI Overview": len(own_site_df[(own_site_df["In SERP"] == False) & (own_site_df["In AI Overview"] == True)]),
-                    "SERP + AI Overview": len(own_site_df[(own_site_df["In SERP"] == True) & (own_site_df["In AI Overview"] == True)]),
-                    "Assente": len(queries) - len(own_site_df)
-                }
-                
-                fig_own = px.pie(
-                    values=list(own_site_summary.values()),
-                    names=list(own_site_summary.keys()),
-                    title="Distribuzione Presenza del Tuo Sito"
-                )
-                st.plotly_chart(fig_own, use_container_width=True)
-            
-            with col2:
-                st.subheader("📋 Dettagli Performance")
-                st.dataframe(own_site_df, use_container_width=True)
-
-        # Analisi AI Overview avanzata
-        if ai_analysis_data:
-            st.markdown("---")
-            st.header("🤖 Analisi Approfondita AI Overview")
-            
-            # Domini più presenti in AI Overview
-            ai_domains = [item["domain"] for item in ai_analysis_data]
-            ai_domain_counter = Counter(ai_domains)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                ai_domains_df = pd.DataFrame(
-                    ai_domain_counter.most_common(10),
-                    columns=["Dominio", "Presenze in AI Overview"]
-                )
-                
-                fig_ai_domains = px.bar(
-                    ai_domains_df,
-                    x="Presenze in AI Overview",
-                    y="Dominio",
-                    orientation="h",
-                    title="Top Domini in AI Overview"
-                )
-                st.plotly_chart(fig_ai_domains, use_container_width=True)
-            
-            with col2:
-                # Mostra esempio di analisi AI
-                if ai_analysis_data:
-                    st.subheader("💡 Esempio Analisi AI")
-                    example = ai_analysis_data[0]
-                    st.write(f"**Query:** {example['query']}")
-                    st.write(f"**URL:** {example['url']}")
-                    st.write(f"**Posizione:** {example['position_in_ai']}")
-                    with st.expander("Vedi analisi completa"):
-                        st.write(example['ai_analysis'])
-
-        # Analisi dati strutturati
-        if structured_data_analysis:
-            st.markdown("---")
-            st.header("📊 Analisi Dati Strutturati SERP")
-            
-            if not structured_stats_df.empty:
-                st.subheader("📈 Statistiche per Query")
-                st.dataframe(structured_stats_df, use_container_width=True)
-            
-            # Schema types più comuni
-            all_schemas = []
-            for item in structured_data_analysis:
-                if item.get('schema_types'):
-                    all_schemas.extend([s.strip() for s in item['schema_types'].split(',')])
-            
-            if all_schemas:
-                schema_counter = Counter(all_schemas)
-                schema_df = pd.DataFrame(
-                    schema_counter.most_common(10),
-                    columns=["Schema Type", "Occorrenze"]
-                )
-                
-                fig_schema = px.bar(
-                    schema_df,
-                    x="Occorrenze",
-                    y="Schema Type",
-                    orientation="h",
-                    title="Schema Types più Utilizzati"
-                )
-                st.plotly_chart(fig_schema, use_container_width=True)
-
-        # Grafici esistenti (domini, tipologie, etc.)
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📈 Top Domini")
-            if not domains_df.empty:
-                fig_domains = px.bar(
-                    domains_df.head(10), 
-                    x="Dominio", 
-                    y="Occorrenze",
-                    title="Top 10 Domini per Occorrenze"
-                )
-                fig_domains.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_domains, use_container_width=True)
-
-        with col2:
-            # AI Overview vs SERP tradizionale
-            ai_vs_serp = {
-                "Con AI Overview": ai_overview_count,
-                "Solo SERP tradizionale": len(queries) - ai_overview_count
-            }
-            
-            fig_ai_vs_serp = px.pie(
-                values=list(ai_vs_serp.values()),
-                names=list(ai_vs_serp.keys()),
-                title="AI Overview vs SERP Tradizionale"
-            )
-            st.plotly_chart(fig_ai_vs_serp, use_container_width=True)
-
-        # Tabelle dettagliate
-        st.subheader("📋 Report Dettagliati")
-        
-        tabs = ["Top Domini", "AI Overview", "Tracking Sito"]
-        if ai_analysis_data:
-            tabs.append("Analisi AI Overview")
-        if structured_data_analysis:
-            tabs.append("Dati Strutturati")
-        if keyword_clusters:
-            tabs.append("Clustering")
-        
-        tab_objects = st.tabs(tabs)
-        
-        with tab_objects[0]:  # Top Domini
-            st.dataframe(domains_df, use_container_width=True)
-        
-        with tab_objects[1]:  # AI Overview
-            ai_overview_list = []
-            for query, ai_info in ai_overview_data.items():
-                ai_overview_list.append({
-                    "Query": query,
-                    "Ha AI Overview": ai_info["has_ai_overview"],
-                    "Numero Fonti": len(ai_info["ai_sources"]),
-                    "Tuo Sito in AI": ai_info.get("own_site_in_ai", False),
-                    "Posizione Tuo Sito": ai_info.get("own_site_ai_position", "")
-                })
-            
-            ai_overview_summary_df = pd.DataFrame(ai_overview_list)
-            st.dataframe(ai_overview_summary_df, use_container_width=True)
-        
-        with tab_objects[2]:  # Tracking Sito
-            if not own_site_df.empty:
-                st.dataframe(own_site_df, use_container_width=True)
-            else:
-                st.info("Nessun dato del proprio sito trovato o tracking non abilitato")
-        
-        current_tab = 3
-        
-        if ai_analysis_data:  # Analisi AI Overview
-            with tab_objects[current_tab]:
-                st.dataframe(ai_analysis_df, use_container_width=True)
-            current_tab += 1
-        
-        if structured_data_analysis:  # Dati Strutturati
-            with tab_objects[current_tab]:
-                st.dataframe(structured_data_df, use_container_width=True)
-            current_tab += 1
-        
-        if keyword_clusters:  # Clustering
-            with tab_objects[current_tab]:
-                clustering_data = []
-                for cluster_name, keywords in keyword_clusters.items():
-                    for keyword in keywords:
-                        clustering_data.append({
-                            "Cluster": cluster_name,
-                            "Keyword": keyword
-                        })
-                clustering_df = pd.DataFrame(clustering_data)
-                st.dataframe(clustering_df, use_container_width=True)
-
-        # Download report
-        st.subheader("💾 Download Report Avanzato")
-        st.download_button(
-            label="📥 Scarica Report Excel Completo",
-            data=excel_data,
-            file_name=f"serp_analysis_enhanced_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        progress_bar.empty()
-        status_text.text("🎉 Analisi avanzata completata con successo!")
+            # Mostra risultati
+            display_results(results)
 
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>🚀 SERP Analyzer Pro Enhanced v2.0 - Con AI Overview Analysis, Site Tracking e Structured Data - Sviluppato con ❤️</p>
+        <p>🚀 SERP Analyzer Plus Ultra - Sviluppato da Daniele e il suo amico Claude 🦕</p>
     </div>
     """, unsafe_allow_html=True)
+
+def run_analysis(queries, serpapi_key, openai_api_key, own_site_domain,
+                country, language, num_results, use_ai_classification,
+                enable_keyword_clustering, enable_ai_overview_analysis,
+                enable_structured_data_analysis, max_pages_analysis):
+    """Esegue l'analisi completa"""
+    
+    # Inizializza analyzer con il proprio sito
+    analyzer = EnhancedSERPAnalyzer(serpapi_key, openai_api_key, own_site_domain)
+    analyzer.use_ai = use_ai_classification
+
+    if own_site_domain:
+        st.info(f"🏠 Tracciamento attivato per: {own_site_domain}")
+
+    # Clustering keywords se abilitato
+    keyword_clusters = {}
+    if enable_keyword_clustering and use_ai_classification:
+        with st.spinner("🧠 Clustering semantico delle keyword..."):
+            try:
+                keyword_clusters = analyzer.cluster_keywords_semantic(queries)
+                st.success(f"✅ Identificati {len(keyword_clusters)} cluster semantici!")
+            except Exception as e:
+                st.warning(f"Errore durante il clustering: {e}")
+
+    # Inizializza strutture dati per le nuove analisi
+    all_domains = []
+    query_page_types = defaultdict(list)
+    domain_page_types = defaultdict(lambda: defaultdict(int))
+    domain_occurences = defaultdict(int)
+    paa_questions = []
+    related_queries = []
+    paa_to_queries = defaultdict(set)
+    related_to_queries = defaultdict(set)
+    paa_to_domains = defaultdict(set)
+    ai_overview_data = {}
+    own_site_tracking = {}
+    ai_analysis_data = []
+    structured_data_analysis = []
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    for i, query in enumerate(queries):
+        status_text.text(f"🔍 Analizzando: {query} ({i+1}/{len(queries)})")
+        
+        # Fetch SERP results
+        results = analyzer.fetch_serp_results(query, country, language, num_results)
+        
+        if results:
+            # Parse risultati base
+            (domain_page_types_query, domain_occurences_query, query_page_types_query,
+             paa_questions_query, related_queries_query, paa_to_queries_query,
+             related_to_queries_query, paa_to_domains_query, ai_overview_info, 
+             own_site_data, organic_results) = analyzer.parse_results(results, query)
+            
+            # Salva dati base
+            ai_overview_data[query] = ai_overview_info
+            own_site_tracking[query] = own_site_data
+            
+            # Aggiungi info AI Overview al tracking proprio sito
+            if own_site_domain:
+                own_site_tracking[query]["in_ai_overview"] = ai_overview_info.get("own_site_in_ai", False)
+                own_site_tracking[query]["ai_overview_position"] = ai_overview_info.get("own_site_ai_position", None)
+
+            # Merge dati
+            for domain, page_types in domain_page_types_query.items():
+                for page_type, count in page_types.items():
+                    domain_page_types[domain][page_type] += count
+            
+            for domain, count in domain_occurences_query.items():
+                domain_occurences[domain] += count
+            
+            query_page_types[query].extend(query_page_types_query[query])
+            paa_questions.extend(paa_questions_query)
+            related_queries.extend(related_queries_query)
+            all_domains.extend(domain_page_types_query.keys())
+
+            # NUOVE ANALISI AVANZATE
+            
+            # 1. Analisi pagine AI Overview
+            if enable_ai_overview_analysis and ai_overview_info["has_ai_overview"] and ai_overview_info["ai_sources"]:
+                status_text.text(f"🤖 Analizzando AI Overview per: {query}")
+                try:
+                    ai_analysis_results = analyzer.analyze_ai_overview_pages(ai_overview_info, query)
+                    ai_analysis_data.extend(ai_analysis_results)
+                except Exception as e:
+                    st.warning(f"Errore analisi AI Overview per '{query}': {e}")
+
+            # 2. Analisi dati strutturati SERP
+            if enable_structured_data_analysis and organic_results:
+                status_text.text(f"📊 Analizzando dati strutturati per: {query}")
+                try:
+                    structured_results = analyzer.analyze_top_serp_structured_data(
+                        organic_results, query, max_pages_analysis
+                    )
+                    structured_data_analysis.extend(structured_results)
+                except Exception as e:
+                    st.warning(f"Errore analisi dati strutturati per '{query}': {e}")
+        
+        progress_bar.progress((i + 1) / len(queries))
+        time.sleep(1.0)  # Rate limiting per le analisi avanzate
+
+    status_text.text("✅ Analisi completata! Generazione report avanzato...")
+
+    # Genera report Excel avanzato
+    domains_counter = Counter(all_domains)
+    excel_data, domains_df, own_site_df, ai_analysis_df, structured_data_df, keyword_analysis_df = analyzer.create_enhanced_excel_report(
+        domains_counter, domain_occurences, query_page_types, domain_page_types,
+        paa_questions, related_queries, paa_to_queries, related_to_queries, paa_to_domains, 
+        ai_overview_data, own_site_tracking, ai_analysis_data, structured_data_analysis, keyword_clusters
+    )
+
+    progress_bar.empty()
+    status_text.empty()
+    
+    return {
+        'excel_data': excel_data,
+        'domains_df': domains_df,
+        'own_site_df': own_site_df,
+        'ai_analysis_df': ai_analysis_df,
+        'structured_data_df': structured_data_df,
+        'keyword_analysis_df': keyword_analysis_df,
+        'ai_overview_data': ai_overview_data,
+        'own_site_tracking': own_site_tracking,
+        'ai_analysis_data': ai_analysis_data,
+        'structured_data_analysis': structured_data_analysis,
+        'queries': queries,
+        'own_site_domain': own_site_domain
+    }
+
+def display_results(results):
+    """Mostra i risultati dell'analisi"""
+    
+    domains_df = results['domains_df']
+    own_site_df = results['own_site_df']
+    ai_analysis_df = results['ai_analysis_df']
+    structured_data_df = results['structured_data_df']
+    keyword_analysis_df = results['keyword_analysis_df']
+    ai_overview_data = results['ai_overview_data']
+    own_site_tracking = results['own_site_tracking']
+    ai_analysis_data = results['ai_analysis_data']
+    structured_data_analysis = results['structured_data_analysis']
+    queries = results['queries']
+    own_site_domain = results['own_site_domain']
+    
+    # VISUALIZZAZIONE RISULTATI POTENZIATA
+    st.markdown("---")
+    st.header("📊 Risultati Analisi Avanzata")
+
+    # Metriche principali
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    with col1:
+        st.metric("Query Analizzate", len(queries))
+    with col2:
+        st.metric("Domini Trovati", len(domains_df))
+    with col3:
+        ai_overview_count = sum(1 for ai_info in ai_overview_data.values() if ai_info["has_ai_overview"])
+        st.metric("Query con AI Overview", ai_overview_count)
+    with col4:
+        if own_site_domain:
+            own_serp_count = sum(1 for data in own_site_tracking.values() if data["in_serp"])
+            st.metric("Tuo Sito in SERP", own_serp_count)
+    with col5:
+        if own_site_domain:
+            own_ai_count = sum(1 for data in own_site_tracking.values() if data.get("in_ai_overview", False))
+            st.metric("Tuo Sito in AI Overview", own_ai_count)
+    with col6:
+        st.metric("Pagine Analizzate", len(ai_analysis_data) + len(structured_data_analysis))
+
+    # Tracking proprio sito (se abilitato)
+    if own_site_domain and not own_site_df.empty:
+        st.markdown("---")
+        st.header("🏠 Performance del Tuo Sito")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Grafico presenza SERP vs AI Overview
+            own_site_summary = {
+                "Solo SERP": len(own_site_df[(own_site_df["In SERP"] == True) & (own_site_df["In AI Overview"] == False)]),
+                "Solo AI Overview": len(own_site_df[(own_site_df["In SERP"] == False) & (own_site_df["In AI Overview"] == True)]),
+                "SERP + AI Overview": len(own_site_df[(own_site_df["In SERP"] == True) & (own_site_df["In AI Overview"] == True)]),
+                "Assente": len(queries) - len(own_site_df)
+            }
+            
+            fig_own = px.pie(
+                values=list(own_site_summary.values()),
+                names=list(own_site_summary.keys()),
+                title="Distribuzione Presenza del Tuo Sito"
+            )
+            st.plotly_chart(fig_own, use_container_width=True)
+        
+        with col2:
+            st.subheader("📋 Dettagli Performance")
+            st.dataframe(own_site_df, use_container_width=True)
+
+    # Analisi AI Overview avanzata
+    if ai_analysis_data:
+        st.markdown("---")
+        st.header("🤖 Analisi Approfondita AI Overview")
+        
+        # Domini più presenti in AI Overview
+        ai_domains = [item["domain"] for item in ai_analysis_data]
+        ai_domain_counter = Counter(ai_domains)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            ai_domains_df = pd.DataFrame(
+                ai_domain_counter.most_common(10),
+                columns=["Dominio", "Presenze in AI Overview"]
+            )
+            
+            fig_ai_domains = px.bar(
+                ai_domains_df,
+                x="Presenze in AI Overview",
+                y="Dominio",
+                orientation="h",
+                title="Top Domini in AI Overview"
+            )
+            st.plotly_chart(fig_ai_domains, use_container_width=True)
+        
+        with col2:
+            # Mostra esempio di analisi AI
+            if ai_analysis_data:
+                st.subheader("💡 Esempio Analisi AI")
+                example = ai_analysis_data[0]
+                st.write(f"**Query:** {example['query']}")
+                st.write(f"**URL:** {example['url']}")
+                st.write(f"**Posizione:** {example['position_in_ai']}")
+                with st.expander("Vedi analisi completa"):
+                    st.write(example['ai_analysis'])
+
+    # Analisi dati strutturati
+    if structured_data_analysis:
+        st.markdown("---")
+        st.header("📊 Analisi Dati Strutturati SERP")
+        
+        # Schema types più comuni
+        all_schemas = []
+        for item in structured_data_analysis:
+            if item.get('schema_types'):
+                all_schemas.extend([s.strip() for s in item['schema_types'].split(',')])
+        
+        if all_schemas:
+            schema_counter = Counter(all_schemas)
+            schema_df = pd.DataFrame(
+                schema_counter.most_common(10),
+                columns=["Schema Type", "Occorrenze"]
+            )
+            
+            fig_schema = px.bar(
+                schema_df,
+                x="Occorrenze",
+                y="Schema Type",
+                orientation="h",
+                title="Schema Types più Utilizzati"
+            )
+            st.plotly_chart(fig_schema, use_container_width=True)
+
+    # Grafici esistenti (domini, tipologie, etc.) - ORDINATI
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📈 Top Domini")
+        if not domains_df.empty:
+            # Già ordinato nella funzione create_enhanced_excel_report
+            fig_domains = px.bar(
+                domains_df.head(10), 
+                x="Dominio", 
+                y="Occorrenze",
+                title="Top 10 Domini per Occorrenze"
+            )
+            fig_domains.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_domains, use_container_width=True)
+
+    with col2:
+        # AI Overview vs SERP tradizionale
+        ai_vs_serp = {
+            "Con AI Overview": ai_overview_count,
+            "Solo SERP tradizionale": len(queries) - ai_overview_count
+        }
+        
+        fig_ai_vs_serp = px.pie(
+            values=list(ai_vs_serp.values()),
+            names=list(ai_vs_serp.keys()),
+            title="AI Overview vs SERP Tradizionale"
+        )
+        st.plotly_chart(fig_ai_vs_serp, use_container_width=True)
+
+    # Tabelle dettagliate
+    st.subheader("📋 Report Dettagliati")
+    
+    tabs = ["Analisi Keyword", "Top Domini", "AI Overview"]
+    if not own_site_df.empty:
+        tabs.append("Tracking Sito")
+    if ai_analysis_data:
+        tabs.append("Analisi AI Overview")
+    if structured_data_analysis:
+        tabs.append("Dati Strutturati")
+    
+    tab_objects = st.tabs(tabs)
+    
+    current_tab = 0
+    
+    # NUOVO TAB: Analisi Keyword (primo tab)
+    with tab_objects[current_tab]:
+        st.subheader("🎯 Analisi Completa per Keyword")
+        st.dataframe(keyword_analysis_df, use_container_width=True)
+    current_tab += 1
+    
+    with tab_objects[current_tab]:  # Top Domini
+        st.dataframe(domains_df, use_container_width=True)
+    current_tab += 1
+    
+    with tab_objects[current_tab]:  # AI Overview
+        ai_overview_list = []
+        for query, ai_info in ai_overview_data.items():
+            ai_overview_list.append({
+                "Query": query,
+                "Ha AI Overview": ai_info["has_ai_overview"],
+                "Numero Fonti": len(ai_info["ai_sources"]),
+                "Tuo Sito in AI": ai_info.get("own_site_in_ai", False),
+                "Posizione Tuo Sito": ai_info.get("own_site_ai_position", "")
+            })
+        
+        ai_overview_summary_df = pd.DataFrame(ai_overview_list)
+        st.dataframe(ai_overview_summary_df, use_container_width=True)
+    current_tab += 1
+    
+    if not own_site_df.empty:  # Tracking Sito
+        with tab_objects[current_tab]:
+            st.dataframe(own_site_df, use_container_width=True)
+        current_tab += 1
+    
+    if ai_analysis_data:  # Analisi AI Overview
+        with tab_objects[current_tab]:
+            st.dataframe(ai_analysis_df, use_container_width=True)
+        current_tab += 1
+    
+    if structured_data_analysis:  # Dati Strutturati
+        with tab_objects[current_tab]:
+            st.dataframe(structured_data_df, use_container_width=True)
+
+    # Download report
+    st.subheader("💾 Download Report Avanzato")
+    st.download_button(
+        label="📥 Scarica Report Excel Completo",
+        data=results['excel_data'],
+        file_name=f"serp_analysis_enhanced_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_report"  # Chiave unica per evitare conflitti
+    )
+
+    st.success("🎉 Analisi avanzata completata con successo!")
 
 if __name__ == "__main__":
     main()
