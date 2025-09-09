@@ -612,6 +612,157 @@ Rispondi solo con la categoria."""
                 related_to_queries, paa_to_domains, ai_overview_info, 
                 own_site_data, organic_results)
 
+    def cluster_keywords_with_custom(self, keywords, custom_clusters):
+        """Clusterizza le keyword usando cluster personalizzati come priorità"""
+        if not self.client or not self.use_ai:
+            return self.cluster_keywords_simple_custom(keywords, custom_clusters)
+        
+        # Dividi in batch per evitare prompt troppo lunghi
+        batch_size = 50
+        all_clusters = {}
+        
+        # Inizializza cluster personalizzati
+        for cluster_name in custom_clusters:
+            all_clusters[cluster_name] = []
+        
+        for i in range(0, len(keywords), batch_size):
+            batch_keywords = keywords[i:i+batch_size]
+            
+            prompt = f"""Ruolo: Esperto di analisi semantica e architettura siti web
+Capacità: Specialista in clustering di keyword basato su strutture di siti web esistenti.
+
+Compito: Assegna ogni keyword al cluster più appropriato, dando PRIORITÀ ai cluster predefiniti del sito.
+
+CLUSTER PREDEFINITI (USA QUESTI COME PRIORITÀ):
+{chr(10).join([f"- {cluster}" for cluster in custom_clusters])}
+
+Keyword da classificare:
+{chr(10).join([f"- {kw}" for kw in batch_keywords])}
+
+Istruzioni:
+1. PRIORITÀ ASSOLUTA: Cerca di assegnare ogni keyword a uno dei cluster predefiniti se semanticamente correlata
+2. Solo se una keyword NON può essere associata a nessun cluster predefinito, crea un nuovo cluster
+3. Ogni cluster deve avere almeno 3 keyword (per quelli nuovi)
+4. Se una keyword non si adatta a nessun cluster, mettila in "Generale"
+
+Formato di risposta:
+Cluster: [Nome Cluster Predefinito o Nuovo]
+- keyword1
+- keyword2
+- keyword3
+
+Cluster: [Altro Cluster]
+- keyword4
+- keyword5"""
+
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=2000,
+                    temperature=0.2
+                )
+                
+                # Parse della risposta
+                response_text = response.choices[0].message.content.strip()
+                clusters = self.parse_clustering_response_custom(response_text, custom_clusters)
+                
+                # Merge dei risultati
+                for cluster_name, cluster_keywords in clusters.items():
+                    if cluster_name in all_clusters:
+                        all_clusters[cluster_name].extend(cluster_keywords)
+                    else:
+                        all_clusters[cluster_name] = cluster_keywords
+                
+            except Exception as e:
+                st.warning(f"Errore clustering personalizzato batch {i//batch_size + 1}: {e}")
+                # Fallback per questo batch
+                simple_clusters = self.cluster_keywords_simple_custom(batch_keywords, custom_clusters)
+                for cluster_name, cluster_keywords in simple_clusters.items():
+                    if cluster_name in all_clusters:
+                        all_clusters[cluster_name].extend(cluster_keywords)
+                    else:
+                        all_clusters[cluster_name] = cluster_keywords
+        
+        # Pulisci cluster vuoti
+        final_clusters = {k: v for k, v in all_clusters.items() if v}
+        
+        return final_clusters
+
+    def cluster_keywords_simple_custom(self, keywords, custom_clusters):
+        """Clustering semplice con cluster personalizzati (fallback)"""
+        clusters = {}
+        
+        # Inizializza cluster personalizzati
+        for cluster_name in custom_clusters:
+            clusters[cluster_name] = []
+        
+        unassigned_keywords = []
+        
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            assigned = False
+            
+            # Prova ad assegnare a cluster personalizzati
+            for cluster_name in custom_clusters:
+                cluster_words = cluster_name.lower().split()
+                if any(word in keyword_lower or keyword_lower in word for word in cluster_words):
+                    clusters[cluster_name].append(keyword)
+                    assigned = True
+                    break
+            
+            if not assigned:
+                unassigned_keywords.append(keyword)
+        
+        # Raggruppa keyword non assegnate
+        if unassigned_keywords:
+            auto_clusters = self.cluster_keywords_simple(unassigned_keywords)
+            clusters.update(auto_clusters)
+        
+        # Rimuovi cluster vuoti
+        final_clusters = {k: v for k, v in clusters.items() if v}
+        
+        return final_clusters
+
+    def parse_clustering_response_custom(self, response_text, custom_clusters):
+        """Parse della risposta di clustering personalizzato"""
+        clusters = {}
+        current_cluster = None
+        
+        lines = response_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('Cluster:'):
+                current_cluster = line.replace('Cluster:', '').strip()
+                clusters[current_cluster] = []
+            elif line.startswith('-') and current_cluster:
+                keyword = line.replace('-', '').strip()
+                if keyword:
+                    clusters[current_cluster].append(keyword)
+        
+        # Per cluster personalizzati, accetta anche cluster con meno di 5 keyword
+        # ma per quelli nuovi mantieni il minimo
+        valid_clusters = {}
+        small_keywords = []
+        
+        for cluster_name, keywords in clusters.items():
+            if cluster_name in custom_clusters:
+                # Cluster personalizzati: accetta qualsiasi size
+                valid_clusters[cluster_name] = keywords
+            elif len(keywords) >= 3:
+                # Cluster nuovi: minimo 3 keyword
+                valid_clusters[cluster_name] = keywords
+            else:
+                small_keywords.extend(keywords)
+        
+        if small_keywords:
+            if "Generale" in valid_clusters:
+                valid_clusters["Generale"].extend(small_keywords)
+            else:
+                valid_clusters["Generale"] = small_keywords
+        
+        return valid_clusters
+
     def cluster_keywords_semantic(self, keywords):
         """Clusterizza le keyword per gruppi semantici usando OpenAI"""
         if not self.client or not self.use_ai:
@@ -736,7 +887,7 @@ Cluster: [Nome Cluster 2]
                                    paa_to_queries, related_to_queries, paa_to_domains, 
                                    ai_overview_data, own_site_tracking, ai_analysis_data,
                                    structured_data_analysis, keyword_clusters=None):
-        """Crea il report Excel potenziato con grafici integrati"""
+        """Crea il report Excel potenziato con formattazione professionale"""
         
         # DataFrames esistenti...
         domain_page_types_list = []
@@ -807,11 +958,11 @@ Cluster: [Nome Cluster 2]
             num_sources = len(ai_info.get("ai_sources", []))
             my_site_in_ai = ai_info.get("own_site_in_ai", False)
             
-            # Analisi AI Overview (prima analisi disponibile per questa query)
+            # Analisi AI Overview (testo completo - non troncato)
             ai_analysis_text = ""
             for ai_item in ai_analysis_data:
                 if ai_item["query"] == query:
-                    ai_analysis_text = ai_item["ai_analysis"][:200] + "..." if len(ai_item["ai_analysis"]) > 200 else ai_item["ai_analysis"]
+                    ai_analysis_text = ai_item["ai_analysis"]  # Testo completo
                     break
             
             # Dati strutturati (schema types più comuni per questa query)
@@ -840,110 +991,230 @@ Cluster: [Nome Cluster 2]
         
         keyword_analysis_df = pd.DataFrame(keyword_analysis_data)
 
-        # Salva tutto in Excel con grafici
+        # Altri DataFrames per AI Overview
+        ai_overview_list = []
+        ai_sources_list = []
+        
+        for query, ai_info in ai_overview_data.items():
+            ai_overview_list.append({
+                "Query": query,
+                "Ha AI Overview": ai_info["has_ai_overview"],
+                "Testo AI Overview": ai_info["ai_overview_text"],  # Testo completo
+                "Numero Fonti": len(ai_info["ai_sources"]),
+                "Proprio Sito in AI": ai_info.get("own_site_in_ai", False),
+                "Posizione Proprio Sito": ai_info.get("own_site_ai_position", "")
+            })
+            
+            for i, source in enumerate(ai_info["ai_sources"]):
+                ai_sources_list.append({
+                    "Query": query,
+                    "Fonte #": i + 1,
+                    "Titolo Fonte": source["title"],
+                    "Link Fonte": source["link"],
+                    "Dominio Fonte": source["domain"]
+                })
+        
+        ai_overview_df = pd.DataFrame(ai_overview_list)
+        ai_sources_df = pd.DataFrame(ai_sources_list)
+
+        # Salva tutto in Excel con formattazione professionale
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
             
-            # NUOVO TAB: Analisi Keyword (primo tab)
-            keyword_analysis_df.to_excel(writer, sheet_name="Analisi Keyword", index=False)
-            worksheet_kw = writer.sheets["Analisi Keyword"]
-            
-            # Formattazione per il tab keyword
+            # Definisci formati personalizzati con Work Sans e colore richiesto
             header_format = workbook.add_format({
                 'bold': True,
-                'bg_color': '#1f77b4',
+                'bg_color': '#E52217',
                 'font_color': 'white',
-                'border': 1
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'text_wrap': True,
+                'font_name': 'Work Sans',
+                'font_size': 11
             })
             
-            # Applica formattazione header
-            for col_num, col_name in enumerate(keyword_analysis_df.columns):
-                worksheet_kw.write(0, col_num, col_name, header_format)
-                # Auto-width per le colonne
-                worksheet_kw.set_column(col_num, col_num, len(col_name) + 5)
+            cell_format = workbook.add_format({
+                'border': 1,
+                'text_wrap': True,
+                'valign': 'top',
+                'font_name': 'Work Sans',
+                'font_size': 10
+            })
             
-            # Top Domains con grafico
-            domains_df.to_excel(writer, sheet_name="Top Domains", index=False, startrow=1)
+            cell_center_format = workbook.add_format({
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'font_name': 'Work Sans',
+                'font_size': 10
+            })
+            
+            number_format = workbook.add_format({
+                'border': 1,
+                'num_format': '#,##0',
+                'align': 'center',
+                'valign': 'vcenter',
+                'font_name': 'Work Sans',
+                'font_size': 10
+            })
+            
+            percentage_format = workbook.add_format({
+                'border': 1,
+                'num_format': '0.00%',
+                'align': 'center',
+                'valign': 'vcenter',
+                'font_name': 'Work Sans',
+                'font_size': 10
+            })
+
+            def format_worksheet(worksheet, df, sheet_name):
+                """Formatta un worksheet con stili consistenti"""
+                # Scrivi headers
+                for col_num, col_name in enumerate(df.columns):
+                    worksheet.write(0, col_num, col_name, header_format)
+                
+                # Scrivi dati con formattazione appropriata
+                for row_num, row_data in enumerate(df.itertuples(index=False), 1):
+                    for col_num, value in enumerate(row_data):
+                        col_name = df.columns[col_num]
+                        
+                        # Scegli il formato appropriato basato sul contenuto
+                        if pd.isna(value):
+                            worksheet.write(row_num, col_num, "", cell_format)
+                        elif col_name in ["Numero occorrenze", "Occorrenze", "Numero fonti", "Fonte #"]:
+                            worksheet.write(row_num, col_num, value, number_format)
+                        elif "%" in str(col_name):
+                            percentage_value = value/100 if isinstance(value, (int, float)) and value > 1 else value
+                            worksheet.write(row_num, col_num, percentage_value, percentage_format)
+                        elif col_name in ["AI Overview", "Il mio sito compare", "In SERP", "In AI Overview", "Ha AI Overview", "Proprio Sito in AI"]:
+                            worksheet.write(row_num, col_num, value, cell_center_format)
+                        else:
+                            worksheet.write(row_num, col_num, value, cell_format)
+                
+                # Auto-adjust column widths intelligentemente
+                for col_num, col_name in enumerate(df.columns):
+                    # Calcola larghezza ottimale
+                    max_length = len(str(col_name))
+                    for row_data in df.itertuples(index=False):
+                        cell_value = str(row_data[col_num]) if pd.notna(row_data[col_num]) else ""
+                        max_length = max(max_length, len(cell_value))
+                    
+                    # Applica larghezze specifiche per colonne particolari
+                    if col_name == "Analisi AI Overview":
+                        adjusted_width = 80  # Extra large per analisi completa
+                    elif "URL" in col_name or "Link" in col_name:
+                        adjusted_width = 50
+                    elif col_name in ["Testo AI Overview"]:
+                        adjusted_width = 60
+                    elif col_name in ["Dati strutturati SERP"]:
+                        adjusted_width = 40
+                    else:
+                        adjusted_width = min(max(max_length + 3, 15), 50)
+                    
+                    worksheet.set_column(col_num, col_num, adjusted_width)
+                
+                # Freeze della prima riga (headers)
+                worksheet.freeze_panes(1, 0)
+                
+                # Imposta altezza righe per text wrapping ottimale
+                worksheet.set_row(0, 30)  # Header più alto
+                for row_num in range(1, len(df) + 1):
+                    # Calcola altezza in base al contenuto delle celle con più testo
+                    max_lines = 1
+                    for col_num, value in enumerate(df.iloc[row_num-1]):
+                        if pd.notna(value) and isinstance(value, str):
+                            lines = len(value) // 50 + 1  # Stima linee necessarie
+                            max_lines = max(max_lines, lines)
+                    
+                    row_height = min(max(max_lines * 15, 25), 200)  # Min 25, max 200
+                    worksheet.set_row(row_num, row_height)
+            
+            # Scrivi e formatta ogni sheet
+            
+            # 1. Analisi Keyword (primo tab)
+            keyword_analysis_df.to_excel(writer, sheet_name="Analisi Keyword", index=False, header=False)
+            worksheet_kw = writer.sheets["Analisi Keyword"]
+            format_worksheet(worksheet_kw, keyword_analysis_df, "Analisi Keyword")
+            
+            # 2. Top Domains con grafico
+            domains_df.to_excel(writer, sheet_name="Top Domains", index=False, header=False)
             worksheet_domains = writer.sheets["Top Domains"]
+            format_worksheet(worksheet_domains, domains_df, "Top Domains")
             
             # Grafico a colonne per Top 10 domini
             chart_domains = workbook.add_chart({'type': 'column'})
+            max_rows = min(10, len(domains_df))
             chart_domains.add_series({
                 'name': 'Occorrenze',
-                'categories': ['Top Domains', 2, 0, min(11, len(domains_df) + 1), 0],  # Top 10
-                'values': ['Top Domains', 2, 1, min(11, len(domains_df) + 1), 1],
+                'categories': ['Top Domains', 1, 0, max_rows, 0],
+                'values': ['Top Domains', 1, 1, max_rows, 1],
                 'fill': {'color': '#1f77b4'},
+                'data_labels': {'value': True}
             })
-            chart_domains.set_title({'name': 'Top 10 Domini per Occorrenze'})
-            chart_domains.set_x_axis({'name': 'Domini'})
-            chart_domains.set_y_axis({'name': 'Occorrenze'})
+            chart_domains.set_title({
+                'name': 'Top 10 Domini per Occorrenze', 
+                'name_font': {'name': 'Work Sans', 'size': 14, 'bold': True}
+            })
+            chart_domains.set_x_axis({'name': 'Domini', 'name_font': {'name': 'Work Sans'}})
+            chart_domains.set_y_axis({'name': 'Occorrenze', 'name_font': {'name': 'Work Sans'}})
             chart_domains.set_size({'width': 600, 'height': 400})
             worksheet_domains.insert_chart('E2', chart_domains)
             
-            # Competitor e tipologie con grafico
-            domain_page_types_df.to_excel(writer, sheet_name="Competitor e Tipologie", index=False, startrow=1)
+            # 3. Competitor e tipologie con grafico
+            domain_page_types_df.to_excel(writer, sheet_name="Competitor e Tipologie", index=False, header=False)
             worksheet_comp = writer.sheets["Competitor e Tipologie"]
+            format_worksheet(worksheet_comp, domain_page_types_df, "Competitor e Tipologie")
             
-            # Grafico a barre stack per tipologie di pagine dei primi 10 domini
+            # Grafico a barre stack per tipologie
             chart_comp = workbook.add_chart({'type': 'bar', 'subtype': 'stacked'})
-            
             page_types = ['Homepage', 'Pagina di Categoria', 'Pagina Prodotto', 'Articolo di Blog', 'Pagina di Servizi', 'Altro']
             colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
             
+            max_comp_rows = min(10, len(domain_page_types_df))
             for i, page_type in enumerate(page_types):
-                col_index = domain_page_types_df.columns.get_loc(page_type) if page_type in domain_page_types_df.columns else None
-                if col_index is not None:
+                if page_type in domain_page_types_df.columns:
+                    col_index = domain_page_types_df.columns.get_loc(page_type)
                     chart_comp.add_series({
                         'name': page_type,
-                        'categories': ['Competitor e Tipologie', 2, 0, min(11, len(domain_page_types_df) + 1), 0],
-                        'values': ['Competitor e Tipologie', 2, col_index, min(11, len(domain_page_types_df) + 1), col_index],
+                        'categories': ['Competitor e Tipologie', 1, 0, max_comp_rows, 0],
+                        'values': ['Competitor e Tipologie', 1, col_index, max_comp_rows, col_index],
                         'fill': {'color': colors[i % len(colors)]},
                     })
             
-            chart_comp.set_title({'name': 'Tipologie di Pagine per Competitor'})
-            chart_comp.set_x_axis({'name': 'Occorrenze'})
-            chart_comp.set_y_axis({'name': 'Domini'})
+            chart_comp.set_title({
+                'name': 'Tipologie di Pagine per Competitor', 
+                'name_font': {'name': 'Work Sans', 'size': 14, 'bold': True}
+            })
+            chart_comp.set_x_axis({'name': 'Occorrenze', 'name_font': {'name': 'Work Sans'}})
+            chart_comp.set_y_axis({'name': 'Domini', 'name_font': {'name': 'Work Sans'}})
             chart_comp.set_size({'width': 800, 'height': 500})
-            worksheet_comp.insert_chart('J2', chart_comp)
+            worksheet_comp.insert_chart('L2', chart_comp)
             
-            # Altri sheet esistenti
-            ai_overview_list = []
-            ai_sources_list = []
+            # 4. Altri sheet con formattazione
+            ai_overview_df.to_excel(writer, sheet_name="AI Overview", index=False, header=False)
+            worksheet_ai = writer.sheets["AI Overview"]
+            format_worksheet(worksheet_ai, ai_overview_df, "AI Overview")
             
-            for query, ai_info in ai_overview_data.items():
-                ai_overview_list.append({
-                    "Query": query,
-                    "Ha AI Overview": ai_info["has_ai_overview"],
-                    "Testo AI Overview": ai_info["ai_overview_text"][:500] + "..." if len(ai_info["ai_overview_text"]) > 500 else ai_info["ai_overview_text"],
-                    "Numero Fonti": len(ai_info["ai_sources"]),
-                    "Proprio Sito in AI": ai_info.get("own_site_in_ai", False),
-                    "Posizione Proprio Sito": ai_info.get("own_site_ai_position", "")
-                })
-                
-                for i, source in enumerate(ai_info["ai_sources"]):
-                    ai_sources_list.append({
-                        "Query": query,
-                        "Fonte #": i + 1,
-                        "Titolo Fonte": source["title"],
-                        "Link Fonte": source["link"],
-                        "Dominio Fonte": source["domain"]
-                    })
-            
-            ai_overview_df = pd.DataFrame(ai_overview_list)
-            ai_sources_df = pd.DataFrame(ai_sources_list)
-            
-            ai_overview_df.to_excel(writer, sheet_name="AI Overview", index=False)
-            ai_sources_df.to_excel(writer, sheet_name="AI Overview Sources", index=False)
+            ai_sources_df.to_excel(writer, sheet_name="AI Overview Sources", index=False, header=False)
+            worksheet_ai_sources = writer.sheets["AI Overview Sources"]
+            format_worksheet(worksheet_ai_sources, ai_sources_df, "AI Overview Sources")
             
             if not own_site_df.empty:
-                own_site_df.to_excel(writer, sheet_name="Tracking Proprio Sito", index=False)
+                own_site_df.to_excel(writer, sheet_name="Tracking Proprio Sito", index=False, header=False)
+                worksheet_own = writer.sheets["Tracking Proprio Sito"]
+                format_worksheet(worksheet_own, own_site_df, "Tracking Proprio Sito")
             
             if not ai_analysis_df.empty:
-                ai_analysis_df.to_excel(writer, sheet_name="Analisi AI Overview Pages", index=False)
+                ai_analysis_df.to_excel(writer, sheet_name="Analisi AI Overview Pages", index=False, header=False)
+                worksheet_ai_analysis = writer.sheets["Analisi AI Overview Pages"]
+                format_worksheet(worksheet_ai_analysis, ai_analysis_df, "Analisi AI Overview Pages")
             
             if not structured_data_df.empty:
-                structured_data_df.to_excel(writer, sheet_name="Dati Strutturati SERP", index=False)
+                structured_data_df.to_excel(writer, sheet_name="Dati Strutturati SERP", index=False, header=False)
+                worksheet_struct = writer.sheets["Dati Strutturati SERP"]
+                format_worksheet(worksheet_struct, structured_data_df, "Dati Strutturati SERP")
             
             # Keyword Clustering
             if keyword_clusters:
@@ -955,7 +1226,9 @@ Cluster: [Nome Cluster 2]
                             "Keyword": keyword
                         })
                 clustering_df = pd.DataFrame(clustering_data)
-                clustering_df.to_excel(writer, sheet_name="Keyword Clustering", index=False)
+                clustering_df.to_excel(writer, sheet_name="Keyword Clustering", index=False, header=False)
+                worksheet_clustering = writer.sheets["Keyword Clustering"]
+                format_worksheet(worksheet_clustering, clustering_df, "Keyword Clustering")
 
         return output.getvalue(), domains_df, own_site_df, ai_analysis_df, structured_data_df, keyword_analysis_df
 
@@ -978,7 +1251,7 @@ def main():
         help="Inserisci la tua API key di OpenAI"
     )
 
-    # NUOVO: Input per il proprio sito
+    # Input per il proprio sito
     st.sidebar.subheader("🏠 Tracking Proprio Sito")
     own_site_url = st.sidebar.text_input(
         "URL del tuo sito (opzionale)",
@@ -1029,7 +1302,22 @@ def main():
         help="Raggruppa le keyword per gruppi semantici"
     )
     
-    # NUOVO: Opzioni per analisi avanzate
+    # Cluster personalizzati
+    custom_clusters = []
+    if enable_keyword_clustering:
+        st.sidebar.subheader("🏗️ Cluster Personalizzati (Opzionale)")
+        custom_clusters_input = st.sidebar.text_area(
+            "Nomi delle pagine/categorie del tuo sito",
+            height=100,
+            placeholder="Servizi SEO\nCorsi Online\nConsulenza Marketing\nBlog Aziendale\nChi Siamo",
+            help="Inserisci i nomi delle tue pagine principali, uno per riga. Le keyword verranno assegnate prioritariamente a questi cluster."
+        )
+        
+        if custom_clusters_input.strip():
+            custom_clusters = [c.strip() for c in custom_clusters_input.strip().split('\n') if c.strip()]
+            st.sidebar.success(f"✅ {len(custom_clusters)} cluster personalizzati definiti")
+    
+    # Opzioni per analisi avanzate
     enable_ai_overview_analysis = st.sidebar.checkbox(
         "Analizza pagine in AI Overview",
         value=True,
@@ -1077,6 +1365,7 @@ def main():
         • 🔍 Suggerimenti AI per ottimizzazione
         • 📈 Grafici Excel integrati
         • 🎯 Report keyword unificato
+        • 🏗️ Cluster personalizzati
         """)
 
     # Mostra risultati se l'analisi è stata completata
@@ -1106,7 +1395,7 @@ def main():
             queries, serpapi_key, openai_api_key, own_site_domain,
             country, language, num_results, use_ai_classification,
             enable_keyword_clustering, enable_ai_overview_analysis,
-            enable_structured_data_analysis, max_pages_analysis
+            enable_structured_data_analysis, max_pages_analysis, custom_clusters
         )
         
         if results:
