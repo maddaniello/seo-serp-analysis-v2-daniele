@@ -1127,7 +1127,7 @@ def main():
 def run_analysis(queries, serpapi_key, openai_api_key, own_site_domain,
                 country, language, num_results, use_ai_classification,
                 enable_keyword_clustering, enable_ai_overview_analysis,
-                enable_structured_data_analysis, max_pages_analysis):
+                enable_structured_data_analysis, max_pages_analysis, custom_clusters=None):
     """Esegue l'analisi completa"""
     
     # Inizializza analyzer con il proprio sito
@@ -1142,10 +1142,42 @@ def run_analysis(queries, serpapi_key, openai_api_key, own_site_domain,
     if enable_keyword_clustering and use_ai_classification:
         with st.spinner("🧠 Clustering semantico delle keyword..."):
             try:
-                keyword_clusters = analyzer.cluster_keywords_semantic(queries)
-                st.success(f"✅ Identificati {len(keyword_clusters)} cluster semantici!")
+                if custom_clusters:
+                    # Usa clustering personalizzato
+                    keyword_clusters = analyzer.cluster_keywords_with_custom(queries, custom_clusters)
+                    st.success(f"✅ Cluster creati: {len(keyword_clusters)} (inclusi {len([k for k in keyword_clusters.keys() if k in custom_clusters])} personalizzati)")
+                    
+                    # Mostra preview cluster personalizzati
+                    with st.expander("👀 Preview Clustering Personalizzato"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write("**Cluster Personalizzati Utilizzati:**")
+                            for cluster_name in custom_clusters:
+                                if cluster_name in keyword_clusters and keyword_clusters[cluster_name]:
+                                    st.write(f"✅ **{cluster_name}** ({len(keyword_clusters[cluster_name])} keyword)")
+                                else:
+                                    st.write(f"⚪ **{cluster_name}** (nessuna keyword assegnata)")
+                        
+                        with col2:
+                            st.write("**Cluster Aggiuntivi Creati:**")
+                            additional_clusters = [k for k in keyword_clusters.keys() if k not in custom_clusters]
+                            for cluster_name in additional_clusters[:5]:
+                                st.write(f"🆕 **{cluster_name}** ({len(keyword_clusters[cluster_name])} keyword)")
+                            if len(additional_clusters) > 5:
+                                st.write(f"... e altri {len(additional_clusters) - 5} cluster")
+                else:
+                    # Usa clustering automatico
+                    keyword_clusters = analyzer.cluster_keywords_semantic(queries)
+                    st.success(f"✅ Identificati {len(keyword_clusters)} cluster semantici!")
+                    
+                    with st.expander("👀 Preview Clustering Automatico"):
+                        for cluster_name, keywords in list(keyword_clusters.items())[:3]:
+                            st.write(f"**{cluster_name}** ({len(keywords)} keyword)")
+                            st.write(", ".join(keywords[:10]) + ("..." if len(keywords) > 10 else ""))
             except Exception as e:
                 st.warning(f"Errore durante il clustering: {e}")
+                keyword_clusters = {}
 
     # Inizializza strutture dati per le nuove analisi
     all_domains = []
