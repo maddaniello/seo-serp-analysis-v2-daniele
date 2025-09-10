@@ -187,43 +187,7 @@ Il file Excel generato include:
 - **Excel grande**: Riduci il numero di keyword o analisi opzionali
 - **Memoria insufficiente**: Riavvia l'applicazione tra sessioni intensive
 
-## Contributi
-
-I contributi sono benvenuti! Per contribuire:
-
-1. Fork del repository
-2. Crea un branch per la feature (`git checkout -b feature/nuova-funzionalita`)
-3. Commit delle modifiche (`git commit -am 'Aggiungi nuova funzionalità'`)
-4. Push del branch (`git push origin feature/nuova-funzionalita`)
-5. Apri una Pull Request
-
-## Licenza
-
-Questo progetto è rilasciato sotto licenza MIT. Vedi il file `LICENSE` per i dettagli.
-
-## Roadmap
-
-### Prossime Funzionalità
-- [ ] Integrazione Google Search Console
-- [ ] Analisi trending keywords
-- [ ] Export automatico Google Sheets
-- [ ] API REST per integrazioni esterne
-- [ ] Dashboard analytics avanzata
-- [ ] Monitoraggio continuo SERP changes
-
-### Miglioramenti Tecnici
-- [ ] Caching Redis per performance
-- [ ] Database PostgreSQL per storico
-- [ ] Docker containerization
-- [ ] CI/CD pipeline
-- [ ] Unit testing coverage
-
-## Supporto
-
-Per supporto, bug report o richieste di funzionalità:
-- Apri un issue su GitHub
-- Contatta: [inserire email di contatto]
 
 ---
 
-**Sviluppato con ❤️ da Daniele e Claude 🤖**
+**Sviluppato con ❤️ da Daniele e dal suo amico Claude 🤖**
